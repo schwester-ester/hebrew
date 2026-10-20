@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ivrit · Read, understand, remember</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">א <span>ivrit<span class="brand-dot">.</span></span></a><span class="tagline">A little reading. A lasting vocabulary.</span><button id="settingsToggle" class="quiet">Deck & settings</button></header>
+<main>
+<section id="settings" class="settings panel" hidden>
+  <div><label for="deck">Anki deck</label><select id="deck"><option value="">Connect to Anki to choose a deck</option></select></div>
+  <div><label for="knownField">Existing notes’ Hebrew field (optional)</label><input id="knownField" placeholder="Uses first field by default"></div>
+  <button id="connect">Connect & sync</button><span id="connection" role="status">Open Anki with AnkiConnect to import directly.</span>
+  <details><summary>Previously skipped words</summary><div id="skips"></div></details>
+  <p class="small">Install AnkiConnect in Anki: Tools → Add-ons → Get Add-ons → <strong>2055492159</strong>, then restart Anki. You can also export a TSV file without AnkiConnect.</p>
+</section>
+<div class="intro"><div class="eyebrow">YOUR DAILY DOSE OF HEBREW</div><h1>Let your reading<br>become your vocabulary.</h1><p>Bring a text. Explore its words. Keep the meanings that matter.</p></div>
+<div id="notice" role="status" aria-live="polite" hidden></div>
+<div class="workspace">
+<section class="reader panel">
+  <div class="section-heading"><div><span class="step">01</span><h2>Your text</h2></div><button id="example" class="quiet">Try an example ↗</button></div>
+  <div id="editor"><textarea id="input" lang="he" dir="rtl" placeholder="הדביקו כאן טקסט בעברית…" aria-label="Hebrew text"></textarea><div class="editor-footer"><span>Paste a passage, an article, or a conversation.</span><button id="read">Start reading <span>←</span></button></div></div>
+  <div id="reading" hidden>
+    <div class="reading-toolbar"><span id="textCount"></span><button id="edit" class="quiet">Edit text</button></div>
+    <div id="passage" lang="he" dir="rtl"></div>
+    <div class="selection-toolbar"><button id="all" class="quiet">Review all</button><button id="selected" class="quiet">Review selected <span id="selectedCount">0</span></button><button id="clear" class="quiet">Clear selection</button></div>
+    <p class="small">Click a word to explore. Ctrl / ⌘ + click to select several. Known words are muted.</p>
+  </div>
+  <div class="reader-note"><span class="note-icon">א</span><p><strong>One spelling, many possibilities.</strong><br>Hebrew often omits vowels. Explore each reading and choose what fits your sentence.</p></div>
+</section>
+<section class="dictionary panel">
+  <div class="section-heading"><div><span class="step">02</span><h2>Explore a word</h2></div><span class="source-label">FROM PEALIM</span></div>
+  <div id="empty"><div class="empty-hebrew" lang="he">מילה</div><h3>Every word has a story.</h3><p>Select a word in your text to see its<br>pronunciations, meanings, and forms.</p></div>
+  <div id="explorer" hidden><div class="word-navigation"><button id="previous" class="icon" aria-label="Previous word">→</button><div><div id="current" lang="he" dir="rtl"></div><span id="position"></span></div><button id="next" class="icon" aria-label="Next word">←</button></div><div class="word-actions"><button id="skip" class="quiet">I know this word · skip</button><button id="retry" class="quiet">Look up again</button></div><div id="results" aria-live="polite"></div></div>
+</section>
+</div>
+<section class="tray panel"><div class="tray-heading"><div><span class="step">03</span><h2>Your next vocabulary</h2><span id="basketCount" class="pill">0 meanings</span></div><div class="tray-actions"><button id="export" class="quiet" disabled>Export TSV</button><button id="import" disabled>Import to Anki ↗</button></div></div><div id="basket"><p class="small">Choose meanings as you read. Your selected words will appear here.</p></div></section>
+<footer>Built for thoughtful reading <span>עברית, מילה אחרי מילה</span></footer>
+</main>
+</body></html>
