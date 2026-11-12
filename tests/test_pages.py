@@ -13,7 +13,8 @@ def test_pages_build_uses_project_relative_assets_and_external_api(tmp_path):
     assert 'data-public="true"' in html
     assert '{{' not in html and '{%' not in html
     assert {p.name for p in tmp_path.iterdir()} == {'index.html', '.nojekyll', 'static'}
-    assert {p.name for p in (tmp_path / 'static').iterdir()} == {'style.css', 'app.js', 'browser-storage.js'}
+    assert 'src="./static/anki-connect.js"' in html
+    assert {p.name for p in (tmp_path / 'static').iterdir()} == {'style.css', 'app.js', 'browser-storage.js', 'anki-connect.js'}
 
 
 @pytest.mark.parametrize('url', ['', 'http://ivrit.example', 'https://ivrit.example/path', 'https://user:secret@ivrit.example', 'https://ivrit.example?x=1'])

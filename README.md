@@ -21,7 +21,7 @@ GitHub Pages serves the interface at **https://schwester-ester.github.io/hebrew/
 1. Deploy the Python backend with the Render instructions below. The included `render.yaml` allows browser requests from exactly `https://schwester-ester.github.io` through `IVRIT_ALLOWED_ORIGINS`. For another host, also configure `IVRIT_ALLOWED_HOSTS` with the backend hostname.
 2. In the GitHub repository, open **Settings → Secrets and variables → Actions → Variables**. Create the repository variable **`IVRIT_API_BASE`** with the backend HTTPS origin, such as `https://your-service.onrender.com` (no path).
 3. In **Settings → Pages**, select **GitHub Actions** as the source. The repository must be public or use a GitHub plan that supports Pages for private repositories.
-4. Run **Deploy GitHub Pages** from the Actions tab, or push to `main`. The workflow waits until `IVRIT_API_BASE` is configured. It publishes only the rendered interface and its three static assets; Python source, databases, and recordings are excluded.
+4. Run **Deploy GitHub Pages** from the Actions tab, or push to `main`. The workflow waits until `IVRIT_API_BASE` is configured. It publishes only the rendered interface and its static assets; Python source, databases, and recordings are excluded.
 
 To preview the static build locally:
 
@@ -45,7 +45,7 @@ To keep this strictly free, use the Free service plan without adding a payment m
 
 The [free tier](https://render.com/docs/free) sleeps after 15 minutes without traffic, and the first request can take about a minute to wake it. It has monthly usage limits; stay on the Free compute plan and check the workspace's usage/billing settings rather than adding paid extras. The server filesystem is temporary, so the public version keeps each visitor's vocabulary, recordings, draft, and skipped words in their own browser's IndexedDB. Exported cards continue working after server cache loss. There are no accounts or cross-device storage: clearing site data removes that browser's saved work, so export cards to retain a copy.
 
-The public version uses **Export for Anki** (TSV or ZIP with recordings). Direct Anki desktop syncing remains available when running the local app: a hosted server cannot reach a visitor's desktop loopback service. Public routes never call the owner's AnkiConnect or expose local stored recordings. Reading and manual-card requests are processed by the server without saving personal content; only public dictionary entries/pages are cached. Translation passes the selected text to Google on demand. Dictionary/translation availability still depends on Pealim and Google's public endpoints.
+The public version supports **Export for Anki** (TSV or ZIP with recordings) and an optional direct connection from the visitor’s browser to their own Anki desktop. The shared Python server only validates and formats cards for import; it never calls AnkiConnect or exposes local stored recordings. Deck names, collection contents, and AnkiConnect API keys stay on the visitor’s computer. Reading and manual-card requests are processed by the server without saving personal content; only public dictionary entries/pages are cached. Translation passes the selected text to Google on demand. Dictionary/translation availability still depends on Pealim and Google's public endpoints.
 
 The public service accepts two concurrent dictionary/translation requests, returning a retry message when busy. Translation requests are limited to 10,000 characters and exports to a 32 MB request body. Recorded cards are validated, source links are restricted to Pealim, and ZIP audio filenames are generated from validated card identities.
 
@@ -60,10 +60,19 @@ Open `http://127.0.0.1:5060`. For a different host outside Render, set `IVRIT_AL
 
 ## Connect your deck
 
-1. Install [AnkiConnect](https://ankiweb.net/shared/info/2055492159) in Anki desktop using add-on code `2055492159`, then restart Anki. Keep Anki open.
-2. In **Deck & settings**, click **Connect & sync** and select your existing vocabulary deck. The app reads its notes through the local AnkiConnect service at port 8765.
-3. By default, the first field of each existing note is treated as its Hebrew front. If Hebrew lives elsewhere, enter the exact field name and sync again. This field must exist on all untagged note types in the selected deck. App-generated cards are recognized by their Pealim identity tags regardless of that setting.
-4. Sync after changes made in Anki. A sync resets the reading queue while retaining your selected meanings.
+The **Your Anki desktop** panel at the top works on the public website and in the local app. TSV/ZIP export remains available without connecting.
+
+1. Install [AnkiConnect](https://ankiweb.net/shared/info/2055492159) in Anki desktop using add-on code `2055492159`, restart Anki, and keep a profile open on the same computer as your browser.
+2. Click **Connect & sync**. On the public website, approve the AnkiConnect request in Anki. If the browser asks for local network access, allow it. The browser contacts only `http://127.0.0.1:8765`; the hosted Python service never connects to your desktop.
+3. Choose an existing deck from the dropdown, or enter a **New deck name** and click **Create deck**. Selecting a deck reads its existing notes so known vocabulary can be skipped.
+4. Choose meanings or add manual cards. Click **Sync cards to Anki** at the top or in the vocabulary tray to add all tray cards to the selected deck, including recordings. Already imported identities are skipped; failed cards stay in the tray for retry. This writes to Anki desktop; use Anki’s own Sync button to sync its collection with AnkiWeb.
+5. Click **Connect & sync** again after changes made in Anki. A deck refresh resets the reading queue while retaining meanings that are not already in the deck.
+
+By default, the first field of each existing untagged note is treated as its Hebrew front. If Hebrew lives elsewhere, expand **First-time setup & connection help**, enter the exact field name, and reconnect. That field must exist on every untagged note model in the selected deck. App-generated cards are recognized by their identity tags regardless of the field setting; separate meanings with the same spelling remain distinct.
+
+If AnkiConnect requires an API key, enter it in connection help. It stays in the current tab, is sent only to local AnkiConnect, and is cleared on reload. No connection is attempted automatically when the website opens.
+
+If access was denied, check this website’s local network permission in the browser. In Anki → Tools → Add-ons → AnkiConnect → Config, ensure `webCorsOriginList` includes `https://schwester-ester.github.io` (or the exact origin where you opened the app), remove that origin from `ignoreOriginList` if present, and restart Anki. Leave AnkiConnect bound to localhost. If the browser cannot connect to local services, TSV/ZIP export still works. Direct desktop connection requires Anki desktop and is not available through AnkiMobile or AnkiDroid alone. See [AnkiConnect permission documentation](https://github.com/ankicommunity/anki-desktop-addon-connect) and [Chrome local network access permissions](https://developer.chrome.com/blog/local-network-access).
 
 When this app runs in WSL and Anki runs on Windows, Linux and Windows may have separate localhost interfaces. If the Linux connection fails, the app automatically uses Windows `curl.exe` (when available on PATH) to reach Windows AnkiConnect. It sends requests through stdin, including recorded audio, and keeps AnkiConnect bound to localhost. No firewall or AnkiConnect bind-address changes are needed. Keep your Windows Anki profile open. If connection still fails, restart Anki and check that AnkiConnect is enabled under Tools → Add-ons. You can verify the add-on from a Windows browser at `http://127.0.0.1:8765`. See [AnkiConnect setup](https://github.com/ankicommunity/anki-desktop-addon-connect#installation) and [Microsoft's WSL networking documentation](https://learn.microsoft.com/windows/wsl/networking).
 
@@ -75,7 +84,7 @@ When this app runs in WSL and Anki runs on Windows, Linux and Windows may have s
 - Each result shows its canonical word, vowelled spelling, pronunciation, stressed vowel, meaning, part of speech, root, binyan/pattern, matched text forms, and prefix interpretation. Pronunciation audio streams from Pealim when you play it.
 - **Add meaning** selects a dictionary entry. Several meanings with the same spelling can be selected independently. The tray persists across refreshes and texts.
 - **I know this word · skip** remembers that exact unpointed surface spelling across future texts. Undo it from **Previously skipped words** or by clicking the muted word.
-- **Import to Anki** creates a `Hebrew Reader` note type with a Hebrew-to-meaning card and adds notes to the selected deck. The answer contains pointed spelling, pronunciation, stress, meaning, grammatical information, root, useful noun/adjective forms, and a source link. Successful notes leave the tray; failed notes remain available for retry. Duplicate Pealim IDs in the selected deck are skipped. Distinct homographs are allowed.
+- **Sync cards to Anki** creates a `Hebrew Reader` note type with a Hebrew-to-meaning card and adds notes to the selected deck. The answer contains pointed spelling, pronunciation, stress, meaning, grammatical information, root, useful noun/adjective forms, and a source link. Successful notes leave the tray; failed notes remain available for retry. Duplicate Pealim IDs in the selected deck are skipped. Distinct homographs are allowed.
 - **Export TSV** works without Anki. Import the file as Basic with Front and Back mapped; its third column is automatically treated as tags. HTML is enabled by a file header. Choose the import option that adds duplicate fronts as new notes to preserve homographs. Sync after importing; exported cards carry the same Pealim identity tags as direct imports. Downloading alone does not mark words known. See [Anki's text import documentation](https://docs.ankiweb.net/manual/importing/text-files).
 
 ## Add your own meanings
@@ -124,8 +133,11 @@ Optional browser checks (require Playwright and Chromium; set `CHROMIUM_PATH` if
 .venv/bin/python tests/browser_smoke.py
 .venv/bin/python tests/browser_features.py
 .venv/bin/python tests/browser_public.py
+.venv/bin/python tests/browser_anki.py
 ```
 
 The feature browser check uses an isolated database, simulated translation/Anki services, and Chromium's synthetic microphone to exercise disjoint selections, recording conversion, media export/import, reload persistence, and mobile layout.
 
 The public browser check uses two isolated browser contexts to verify that visitors cannot see each other's cards, audio, drafts, or skips. It also deletes the server cache before exporting browser-owned dictionary cards and recorded manual cards.
+
+The hosted Anki browser check simulates AnkiConnect instead of accessing a real collection. It exercises permission/key handling, deck selection and creation, recorded-card import, duplicate protection, failed-card retries, custom Hebrew fields, browser-only collection data, and mobile layout.

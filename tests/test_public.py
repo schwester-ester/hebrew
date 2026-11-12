@@ -3,6 +3,7 @@ import sqlite3
 import zipfile
 import pytest
 from app import create_app
+from anki import card_fields, MODEL_CONFIG
 from portable import portable_entry
 from test_features import wav
 from test_reader import entry
@@ -30,9 +31,47 @@ def test_public_routes_never_reach_desktop_anki(tmp_path, monkeypatch):
     app = public_app(tmp_path, monkeypatch)
     monkeypatch.setattr(app.extensions['anki'], 'call', lambda *a, **kw: pytest.fail('Public service contacted desktop Anki'))
     client = app.test_client()
-    for path, method in [('decks', 'get'), ('sync', 'post'), ('import', 'post'), ('skip', 'post'), ('audio/manual-'+'a'*32, 'get')]:
+    for path, method in [('decks', 'get'), ('create-deck', 'post'), ('sync', 'post'), ('import', 'post'), ('skip', 'post'), ('audio/manual-'+'a'*32, 'get')]:
         result = getattr(client, method)('/api/' + path, **({'json': {}} if method == 'post' else {}))
         assert result.status_code == 404
+
+
+def test_public_anki_prepare_is_stateless_and_never_contacts_desktop(tmp_path, monkeypatch):
+    app = public_app(tmp_path, monkeypatch)
+    monkeypatch.setattr(app.extensions['anki'], 'call', lambda *a, **kw: pytest.fail('Server contacted desktop Anki'))
+    client = app.test_client()
+    cards = client.post('/api/manual', json={'word': 'ספר', 'meanings': ['<b>book</b>'], 'recording': wav()}).json['entries']
+    dictionary = entry('adjective')
+    response = client.post('/api/anki-prepare', json={'entries': cards + [dictionary]})
+    assert response.status_code == 200
+    prepared = response.json
+    assert prepared['model'] == MODEL_CONFIG
+    manual = prepared['cards'][0]
+    assert manual['fields']['Meaning'] == '&lt;b&gt;book&lt;/b&gt;'
+    assert manual['recording'] == wav()
+    assert manual['audio_filename'] == manual['id'] + '.wav'
+    assert manual['tags'] == ['hebrew-reader', 'hebrew-reader::' + manual['id']]
+    assert prepared['cards'][1]['fields'] == card_fields(dictionary)
+    assert prepared['cards'][1]['tags'] == ['hebrew-reader', 'pealim::5422']
+    with sqlite3.connect(app.extensions['store'].path) as db:
+        assert db.execute('SELECT COUNT(*) FROM entries').fetchone()[0] == 0
+    assert client.post('/api/anki-prepare', json={'ids': ['6104']}).status_code == 400
+    assert client.post('/api/anki-prepare', json={'entries': [{**dictionary, 'url': 'javascript:alert(1)'}]}).status_code == 400
+
+
+def test_local_create_deck_validates_name_and_calls_anki(tmp_path, monkeypatch):
+    app = create_app(tmp_path / 'local.sqlite3', public=False)
+    calls = []
+    def call(action, **params):
+        calls.append((action, params))
+        return ['Default', 'Hebrew'] if action == 'deckNames' else 123
+    monkeypatch.setattr(app.extensions['anki'], 'call', call)
+    client = app.test_client()
+    for name in ['', None, 5, 'x' * 201, 'invalid\nname']:
+        assert client.post('/api/create-deck', json={'name': name}).status_code == 400
+    assert not calls
+    assert client.post('/api/create-deck', json={'name': ' Hebrew '}).json == {'deck': 'Hebrew', 'decks': ['Default', 'Hebrew']}
+    assert calls == [('createDeck', {'deck': 'Hebrew'}), ('deckNames', {})]
 
 
 def test_public_cards_are_stateless_and_export_after_restart(tmp_path, monkeypatch):

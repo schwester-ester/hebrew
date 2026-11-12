@@ -6,7 +6,8 @@ let browserLoaded=!publicSite;
 const audioURLs=new Map();
 let words = [], selected = new Set(), queue = [], position = -1, basket = new Map(), lookupVersion = 0;
 let resultsByWord = new Map(), knownIds = new Set(), skipped = new Set();
-let syncedDeck = '', reviewBusy = false;
+let knownWords = new Set();
+let syncedDeck = '', reviewBusy = false, ankiConnected = false, connectionBusy = false;
 let selectionAnchor = null, translationVersion = 0;
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const he = value => `<bdi lang="he" dir="rtl">${escapeHTML(value)}</bdi>`;
@@ -14,6 +15,9 @@ function notice(message) { $('notice').textContent = message; $('notice').hidden
 async function api(path, data) {
   if(publicSite) {
     await browserReady;
+    if(path==='decks')return IvritAnki.connect();
+    if(path==='sync')return IvritAnki.known(data.deck,data.field);
+    if(path==='create-deck')return IvritAnki.createDeck(data.name);
     if(path==='skip') {
       const updated=new Set(skipped);
       if(data.remove)updated.delete(data.word);else updated.add(data.word);
@@ -22,13 +26,19 @@ async function api(path, data) {
       return {skipped:[...skipped]};
     }
   }
-  const response = await fetch(apiURL(path), data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  // Deck names and collection contents stay on the visitor's computer.
+  const payload=publicSite && data ? Object.fromEntries(Object.entries(data).filter(([key])=>key!=='deck')) : data;
+  const response = await fetch(apiURL(path), data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Request failed. Please retry.');
   if(publicSite && path==='text') {
     result.skipped=[...skipped];
-    for(const word of result.tokens)if(skipped.has(word.key)){word.known=true;word.reason='Previously skipped';}
+    for(const word of result.tokens) {
+      word.known=skipped.has(word.key) || knownWords.has(word.key);
+      word.reason=skipped.has(word.key) ? 'Previously skipped' : knownWords.has(word.key) ? 'In your Anki deck' : '';
+    }
   }
+  if(publicSite && path==='lookup')for(const entry of result.entries)entry.known=knownIds.has(entry.id) || knownWords.has(entry.canonical?.plain);
   return result;
 }
 function deck() { return $('deck').value; }
@@ -49,7 +59,13 @@ function renderBasket() {
   snapshot();
   $('basketCount').textContent = `${basket.size} meaning${basket.size === 1 ? '' : 's'}`;
   $('export').disabled = !basket.size || reviewBusy;
-  $('import').disabled = !basket.size || !syncedDeck || deck() !== syncedDeck || reviewBusy;
+  $('import').disabled = !basket.size || !syncedDeck || deck() !== syncedDeck || reviewBusy || connectionBusy;
+  $('syncCards').disabled=$('import').disabled;
+  $('deck').disabled=!ankiConnected || reviewBusy || connectionBusy;
+  $('connect').disabled=reviewBusy || connectionBusy;
+  $('createDeck').disabled=!ankiConnected || reviewBusy || connectionBusy;
+  $('newDeck').disabled=reviewBusy || connectionBusy;
+  $('knownField').disabled=reviewBusy || connectionBusy;
   $('basket').innerHTML = basket.size ? [...basket.values()].map(e => `<div class="basket-item"><span class="lemma">${he(e.canonical.plain)}</span><span class="small">${escapeHTML(e.meaning)}${e.source === 'manual' ? '<br>Added manually' : ''}</span>${e.audio_filename ? `<audio controls preload="none" src="${cardAudio(e)}" aria-label="Your recording"></audio>` : ''}<button class="quiet" data-remove="${e.id}">Remove</button></div>`).join('') : '<p class="small">Choose meanings as you read. Your selected words will appear here.</p>';
 }
 if(!publicSite)try { for (const e of JSON.parse(localStorage.getItem('ivrit-basket') || '[]')) if(e?.canonical && /^(\d+|manual-[a-f0-9]{32})$/.test(e.id)) basket.set(e.id,e); } catch {}
@@ -141,34 +157,57 @@ function renderSkips() {
   $('skips').innerHTML = skipped.size ? [...skipped].map(word => `<button class="quiet" data-unskip="${escapeHTML(word)}">${he(word)} ×</button>`).join('') : '<span class="small">No skipped words yet.</span>';
 }
 async function connect() {
-  $('connect').disabled=true; $('connection').textContent='Connecting…';
+  connectionBusy=true; ankiConnected=false; forgetDeck();renderBasket();
+  $('connection').textContent='Connecting… approve access in Anki and your browser if asked.';
   try {
     const {decks} = await api('decks');
+    ankiConnected=true;
     const preferred = deck() || localStorage.getItem('ivrit-deck');
-    $('deck').innerHTML = decks.map(d => `<option value="${escapeHTML(d)}">${escapeHTML(d)}</option>`).join('');
+    $('deck').innerHTML = decks.length ? decks.map(d => `<option value="${escapeHTML(d)}">${escapeHTML(d)}</option>`).join('') : '<option value="">Create a deck below</option>';
     if(decks.includes(preferred)) $('deck').value=preferred;
-    if(!decks.length) throw new Error('Create a deck in Anki first.');
-    await sync();
+    if(decks.length)await sync();
+    else $('connection').textContent='Connected · enter a new deck name and choose Create deck.';
   } catch(error) {syncedDeck=''; $('connection').textContent=error.message;renderBasket();}
-  finally {$('connect').disabled=false;}
+  finally {connectionBusy=false;renderBasket();}
+}
+function forgetDeck() {
+  syncedDeck='';knownIds.clear();knownWords.clear();resultsByWord.clear();lookupVersion++;
+  for(const word of words){word.known=skipped.has(word.key);word.reason=word.known ? 'Previously skipped' : '';}
+  if(words.length)renderPassage();
 }
 async function sync() {
   const selectedDeck=deck();
-  syncedDeck='';renderBasket();
-  const result = await api('sync',{deck:selectedDeck,field:$('knownField').value});
-  if(deck() !== selectedDeck) return;
-  syncedDeck=selectedDeck; knownIds=new Set(result.entries); resultsByWord.clear();
-  localStorage.setItem('ivrit-deck',selectedDeck);
-  $('connection').textContent=`Connected · ${result.words.length + result.entries.length} known words / meanings`;
-  const knownWords = new Set(result.words);
-  for(const [id, entry] of basket) if(knownIds.has(id) || (entry.source !== 'manual' && knownWords.has(entry.canonical.plain))) basket.delete(id);
-  renderBasket();
-  if(words.length) await startReading();
+  forgetDeck();connectionBusy=true;renderBasket();
+  $('connection').textContent='Reading the selected Anki deck…';
+  try {
+    const result = await api('sync',{deck:selectedDeck,field:$('knownField').value.trim()});
+    if(deck() !== selectedDeck) return;
+    syncedDeck=selectedDeck; knownIds=new Set(result.entries); resultsByWord.clear();
+    localStorage.setItem('ivrit-deck',selectedDeck);
+    $('connection').textContent=`Connected · ${result.words.length + result.entries.length} known words / meanings`;
+    knownWords = new Set(result.words);
+    for(const [id, entry] of basket) if(knownIds.has(id) || (entry.source !== 'manual' && knownWords.has(entry.canonical.plain))) basket.delete(id);
+    renderBasket();
+    if(words.length) await startReading();
+  } catch(error) {$('connection').textContent=error.message;throw error;}
+  finally {connectionBusy=false;renderBasket();}
 }
 function handle(fn) {return async (...args) => {try {await fn(...args);} catch(error) {notice(error.message);}};}
 $('settingsToggle').onclick=()=>{$('settings').hidden=!$('settings').hidden;};
 $('connect').onclick=handle(connect);
 $('deck').onchange=handle(sync);
+$('createDeck').onclick=handle(async()=>{
+  connectionBusy=true;renderBasket();
+  try {
+    const result=await api('create-deck',{name:$('newDeck').value});
+    $('deck').innerHTML=result.decks.map(d=>`<option value="${escapeHTML(d)}">${escapeHTML(d)}</option>`).join('');
+    $('deck').value=result.deck;$('newDeck').value='';
+    await sync();
+  } catch(error) {$('connection').textContent=error.message;throw error;}
+  finally {connectionBusy=false;renderBasket();}
+});
+$('syncCards').onclick=()=>{$('import').click();};
+if(publicSite)$('ankiOrigin').textContent=location.origin;
 $('read').onclick=handle(startReading);
 $('example').onclick=()=>{$('input').value='קראתי ספר טוב בבית. הילדים משחקים בגינה, ועל השולחנות יש ספרים חדשים.';$('editor').hidden=false;$('reading').hidden=true;};
 $('edit').onclick=()=>{lookupVersion++; $('editor').hidden=false;$('reading').hidden=true;$('explorer').hidden=true;$('empty').hidden=false;};
@@ -202,16 +241,19 @@ $('skips').onclick=handle(async event=>{
   const result=await api('skip',{word:button.dataset.unskip,remove:true});skipped=new Set(result.skipped);renderSkips();
   if(words.length) await startReading();
 });
-$('basket').onclick=event=>{const button=event.target.closest('[data-remove]');if(button){basket.delete(button.dataset.remove);renderBasket();if(position>=0)showWord();}};
+$('basket').onclick=event=>{if(reviewBusy)return;const button=event.target.closest('[data-remove]');if(button){basket.delete(button.dataset.remove);renderBasket();if(position>=0)showWord();}};
 $('import').onclick=handle(async()=>{
-  reviewBusy=true;renderBasket();$('import').textContent='Importing…';$('deck').disabled=true;$('connect').disabled=true;
+  reviewBusy=true;renderBasket();$('import').textContent='Syncing…';$('syncCards').textContent='Syncing…';
   try {
-    const result=await api('import',{deck:deck(),ids:[...basket.keys()]});
+    const result=publicSite ? await IvritAnki.add(deck(),await api('anki-prepare',{entries:[...basket.values()]}),$('knownField').value.trim(),
+      (current,total)=>{$('connection').textContent=`Sending card ${current} of ${total} to ${deck()}…`;}) : await api('import',{deck:deck(),ids:[...basket.keys()]});
     for(const id of [...result.imported,...result.duplicates]){basket.delete(id);knownIds.add(id);}
     resultsByWord.clear();
-    notice(`Imported ${result.imported.length} meanings. ${result.duplicates.length} already in deck.${result.failed.length ? '\nNot imported: ' + result.failed.map(f=>f.error).join('; ') : ''}`);
+    const message=`Imported ${result.imported.length} meanings. ${result.duplicates.length} already in deck.${result.failed.length ? '\nNot imported: ' + result.failed.map(f=>f.error).join('; ') : ''}`;
+    notice(message);$('connection').textContent=message;
     if(position>=0)showWord();
-  } finally {reviewBusy=false;$('import').textContent='Import to Anki ↗';$('deck').disabled=false;$('connect').disabled=false;renderBasket();}
+  } catch(error) {$('connection').textContent=error.message;throw error;}
+  finally {reviewBusy=false;$('import').textContent='Sync cards to Anki ↗';$('syncCards').textContent='Sync cards to Anki ↗';renderBasket();}
 });
 $('export').onclick=handle(async()=>{
   if(publicSite)await browserReady;

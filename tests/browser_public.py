@@ -37,8 +37,9 @@ def main():
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto('http://127.0.0.1:5053')
                 page.wait_for_function("document.body.dataset.storageReady === 'true'")
-                assert not page.locator('#connect').is_visible()
-                assert not page.locator('#import').is_visible()
+                assert page.locator('#connect').is_visible()
+                assert page.locator('#import').is_visible()
+                assert page.locator('#import').is_disabled()
                 page.fill('#input', 'ספר טוב')
                 page.click('#read')
                 page.locator('.token').nth(0).click()
@@ -100,7 +101,7 @@ def main():
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 assert not errors, errors
                 browser.close()
-                print('Public browser check passed: per-browser isolation, IndexedDB audio/cards/draft/skips, local Anki disabled, export after cache loss, manual form, mobile layout.')
+                print('Public browser check passed: per-browser isolation, IndexedDB audio/cards/draft/skips, optional desktop connection, export after cache loss, manual form, mobile layout.')
         finally:
             server.shutdown()
 

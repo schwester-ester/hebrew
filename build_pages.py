@@ -19,7 +19,7 @@ def build(api_base, destination):
     (destination / 'index.html').write_text(html, encoding='utf-8')
     (destination / '.nojekyll').touch()
     (destination / 'static').mkdir(exist_ok=True)
-    for name in ('style.css', 'app.js', 'browser-storage.js'):
+    for name in ('style.css', 'app.js', 'browser-storage.js', 'anki-connect.js'):
         shutil.copyfile(root / 'static' / name, destination / 'static' / name)
 
 

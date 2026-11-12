@@ -12,6 +12,10 @@ from morphology import normalize, tokens
 
 MODEL = 'Hebrew Reader'
 FIELDS = ['Word', 'Meaning', 'Pronunciation', 'Grammar', 'Root', 'Forms', 'Source']
+MODEL_CONFIG = dict(modelName=MODEL, inOrderFields=FIELDS,
+    css='.card {font-family:Arial;text-align:center;font-size:22px;color:#173d39;background:#faf9f4;} .word {font-size:40px;direction:rtl;} .meta {font-size:18px;margin-top:16px;line-height:1.7;} a {color:#22776d;}',
+    cardTemplates=[dict(Name='Hebrew → meaning', Front='<div class="word">{{Word}}</div>',
+        Back='{{FrontSide}}<hr id="answer">{{Meaning}}<div class="meta">{{Pronunciation}}<br>{{Grammar}}<br>Root: {{Root}}<br>{{Forms}}<br>{{Source}}</div>')])
 
 def identity_tag(entry):
     return ('hebrew-reader::' if entry.get('source') == 'manual' else 'pealim::') + entry['id']
@@ -139,10 +143,7 @@ class Anki:
 
     def ensure_model(self):
         if MODEL not in self.call('modelNames'):
-            self.call('createModel', modelName=MODEL, inOrderFields=FIELDS,
-                      css='.card {font-family:Arial;text-align:center;font-size:22px;color:#173d39;background:#faf9f4;} .word {font-size:40px;direction:rtl;} .meta {font-size:18px;margin-top:16px;line-height:1.7;} a {color:#22776d;}',
-                      cardTemplates=[dict(Name='Hebrew → meaning', Front='<div class="word">{{Word}}</div>',
-                                          Back='{{FrontSide}}<hr id="answer">{{Meaning}}<div class="meta">{{Pronunciation}}<br>{{Grammar}}<br>Root: {{Root}}<br>{{Forms}}<br>{{Source}}</div>')])
+            self.call('createModel', **MODEL_CONFIG)
         elif self.call('modelFieldNames', modelName=MODEL) != FIELDS:
             raise ValueError('An existing Hebrew Reader model has incompatible fields. Rename it in Anki, then retry.')
 

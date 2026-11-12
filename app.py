@@ -5,7 +5,7 @@ import zipfile
 import re
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template, Response, g
-from anki import Anki, export_tsv
+from anki import Anki, export_tsv, card_fields, identity_tag, MODEL_CONFIG
 from morphology import normalize, tokens
 from pealim import Pealim
 from storage import Store
@@ -34,8 +34,8 @@ def create_app(data_path=None, public=None):
 
     @app.before_request
     def request_policy():
-        if public and (request.path in ('/api/decks', '/api/sync', '/api/import', '/api/skip') or request.path.startswith('/api/audio/')):
-            return jsonify(error='Use Export for Anki on the shared website. Desktop syncing is available in the local app.'), 404
+        if public and (request.path in ('/api/decks', '/api/create-deck', '/api/sync', '/api/import', '/api/skip') or request.path.startswith('/api/audio/')):
+            return jsonify(error='Connect to Anki desktop directly from your browser, or use Export for Anki.'), 404
         origin = request.headers.get('Origin')
         if request.path.startswith('/api/') and request.method == 'OPTIONS':
             if origin not in allowed_origins:
@@ -115,6 +115,14 @@ def create_app(data_path=None, public=None):
     def decks():
         return jsonify(decks=anki.decks())
 
+    @app.post('/api/create-deck')
+    def create_deck():
+        name = request.get_json().get('name')
+        if not isinstance(name, str) or not name.strip() or len(name) > 200 or any(ord(c) < 32 for c in name):
+            raise ValueError('Enter a deck name between 1 and 200 characters.')
+        anki.call('createDeck', deck=name.strip())
+        return jsonify(decks=anki.decks(), deck=name.strip())
+
     @app.post('/api/sync')
     def sync():
         data = request.get_json()
@@ -174,6 +182,16 @@ def create_app(data_path=None, public=None):
         if not isinstance(ids, list) or not ids or len(ids) > 500 or not all(isinstance(i, str) for i in ids):
             raise ValueError('Select between 1 and 500 dictionary meanings.')
         return [store.get_entry(id) for id in dict.fromkeys(ids)]
+
+    @app.post('/api/anki-prepare')
+    def prepare_anki():
+        # Only render validated browser-owned cards. Desktop requests happen in
+        # the visitor's browser, never from the shared server.
+        entries = selected(request.get_json())
+        return jsonify(model=MODEL_CONFIG, cards=[dict(
+            id=e['id'], word=e['canonical']['plain'], manual=e.get('source') == 'manual',
+            fields=card_fields(e), tags=['hebrew-reader', identity_tag(e)],
+            recording=e.get('recording', ''), audio_filename=e.get('audio_filename', '')) for e in entries])
 
     @app.post('/api/import')
     def import_notes():
