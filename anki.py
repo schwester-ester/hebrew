@@ -2,12 +2,19 @@ import csv
 import html
 import io
 import re
+import json
+import platform
+import shutil
+import subprocess
 import requests
 from bs4 import BeautifulSoup
 from morphology import normalize, tokens
 
 MODEL = 'Hebrew Reader'
 FIELDS = ['Word', 'Meaning', 'Pronunciation', 'Grammar', 'Root', 'Forms', 'Source']
+
+def identity_tag(entry):
+    return ('hebrew-reader::' if entry.get('source') == 'manual' else 'pealim::') + entry['id']
 
 def card_fields(entry):
     if not entry['importable']:
@@ -16,11 +23,14 @@ def card_fields(entry):
     word = c['plain']
     if entry['irregular_plural'] and entry['plural']:
         word += ' / ' + entry['plural']['plain']
-    pronunciation = html.escape(c['vowelled']) + ' · ' + html.escape(c['pronunciation'])
+    pronunciation = ' · '.join(html.escape(v) for v in (c['vowelled'], c['pronunciation']) if v)
+    if entry.get('audio_filename'):
+        pronunciation += ' [sound:' + entry['audio_filename'] + ']'
     if c['stress']:
         pronunciation += ' (stress: ' + html.escape(c['stress']) + ')'
     grammar = entry['characteristics']
-    grammar += ' · infinitive' if entry['pos'] == 'verb' else ' · masculine singular' if entry['pos'] == 'adjective' else ' · plural-only noun' if entry['plural_only'] else ' · singular' if entry['pos'] == 'noun' else ''
+    if entry.get('source') != 'manual':
+        grammar += ' · infinitive' if entry['pos'] == 'verb' else ' · masculine singular' if entry['pos'] == 'adjective' else ' · plural-only noun' if entry['plural_only'] else ' · singular' if entry['pos'] == 'noun' else ''
     forms = []
     if entry['plural']:
         p = entry['plural']
@@ -33,8 +43,8 @@ def card_fields(entry):
             forms.append(html.escape(label + ': ' + f['vowelled'] + ' · ' + f['pronunciation']))
     return dict(Word=html.escape(word), Meaning=html.escape(entry['meaning']),
                 Pronunciation=pronunciation, Grammar=html.escape(grammar),
-                Root=html.escape(entry['root']), Forms='<br>'.join(forms),
-                Source=f'<a href="{html.escape(entry["url"], quote=True)}">Pealim · {entry["id"]}</a>')
+                Root=html.escape(entry['root']), Forms='<br>'.join(forms + ([html.escape(entry['notes'])] if entry.get('notes') else [])),
+                Source='Added manually' if entry.get('source') == 'manual' else f'<a href="{html.escape(entry["url"], quote=True)}">Pealim · {entry["id"]}</a>')
 
 def export_tsv(entries):
     out = io.StringIO()
@@ -43,17 +53,56 @@ def export_tsv(entries):
     for entry in entries:
         fields = card_fields(entry)
         back = '<br>'.join(fields[k] for k in FIELDS[1:] if fields[k])
-        writer.writerow([fields['Word'], back, 'hebrew-reader pealim::' + entry['id']])
+        writer.writerow([fields['Word'], back, 'hebrew-reader ' + identity_tag(entry)])
     return out.getvalue()
 
 class Anki:
+    @staticmethod
+    def windows_curl():
+        # WSL's Linux loopback may be separate from Windows loopback. A native
+        # Windows client can reach Anki without opening its port to the network.
+        if platform.system() == 'Linux' and 'microsoft' in platform.release().lower():
+            return shutil.which('curl.exe')
+        return None
+
+    def call_windows(self, executable, payload):
+        response = subprocess.run(
+            [executable, '--silent', '--show-error', '--fail', '--noproxy', '*',
+             '--max-time', '20', 'http://127.0.0.1:8765',
+             '--header', 'Content-Type: application/json', '--data-binary', '@-'],
+            input=json.dumps(payload, ensure_ascii=False), capture_output=True,
+            encoding='utf-8', errors='replace', timeout=25, check=False)
+        if response.returncode:
+            raise ValueError('Could not reach AnkiConnect on Windows at 127.0.0.1:8765. '
+                             'Restart Anki, open a profile, and check that AnkiConnect is enabled in Tools → Add-ons.')
+        return json.loads(response.stdout)
+
     def call(self, action, **params):
+        payload = dict(action=action, version=6, params=params)
         try:
-            response = requests.post('http://127.0.0.1:8765', json=dict(action=action, version=6, params=params), timeout=20)
-            response.raise_for_status()
-            result = response.json()
-        except (requests.RequestException, ValueError) as error:
-            raise ValueError('Could not connect to Anki. Open Anki desktop with the AnkiConnect add-on installed.') from error
+            if getattr(self, '_windows_client', None):
+                result = self.call_windows(self._windows_client, payload)
+            else:
+                try:
+                    response = requests.post('http://127.0.0.1:8765', json=payload, timeout=20)
+                except (requests.ConnectionError, requests.Timeout):
+                    executable = self.windows_curl()
+                    if not executable:
+                        raise
+                    result = self.call_windows(executable, payload)
+                    self._windows_client = executable
+                else:
+                    response.raise_for_status()
+                    result = response.json()
+        except (requests.RequestException, OSError, subprocess.TimeoutExpired) as error:
+            raise ValueError('Could not reach AnkiConnect at 127.0.0.1:8765. '
+                             'Restart Anki, open a profile, and check that AnkiConnect is enabled in Tools → Add-ons.') from error
+        except (ValueError, TypeError) as error:
+            if str(error).startswith('Could not reach AnkiConnect on Windows'):
+                raise
+            raise ValueError('AnkiConnect returned an invalid response. Check its configuration and restart Anki.') from error
+        if not isinstance(result, dict) or 'result' not in result or 'error' not in result:
+            raise ValueError('AnkiConnect returned an invalid response. Check its configuration and restart Anki.')
         if result.get('error'):
             raise ValueError(str(result['error']))
         return result.get('result')
@@ -72,7 +121,7 @@ class Anki:
             notes = self.call('notesInfo', notes=ids[offset:offset + 200])
             for note in notes:
                 tags = note.get('tags', [])
-                own = [t.removeprefix('pealim::') for t in tags if re.fullmatch(r'pealim::\d+', t)]
+                own = [t.split('::', 1)[1] for t in tags if re.fullmatch(r'pealim::\d+|hebrew-reader::manual-[a-f0-9]{32}', t)]
                 if own:
                     entries.update(own)
                     continue  # Knowing one sense must not suppress its homographs.
@@ -105,12 +154,17 @@ class Anki:
         imported, duplicates, failed = [], [], []
         for entry in entries:
             try:
-                tag = 'pealim::' + entry['id']
+                tag = identity_tag(entry)
                 canonical = entry.get('canonical') or {}
-                if entry['id'] in known_ids or canonical.get('plain') in known_words or self.call('findNotes', query=self.deck_query(deck) + ' tag:' + tag):
+                if entry['id'] in known_ids or (entry.get('source') != 'manual' and canonical.get('plain') in known_words) or self.call('findNotes', query=self.deck_query(deck) + ' tag:' + tag):
                     duplicates.append(entry['id'])
                     continue
-                note_id = self.call('addNote', note=dict(deckName=deck, modelName=MODEL, fields=card_fields(entry),
+                fields = card_fields(entry)
+                if entry.get('recording'):
+                    filename = self.call('storeMediaFile', filename=entry['audio_filename'], data=entry['recording'])
+                    if filename != entry['audio_filename']:
+                        raise ValueError('Anki could not save the recording. Retry this card.')
+                note_id = self.call('addNote', note=dict(deckName=deck, modelName=MODEL, fields=fields,
                                   options=dict(allowDuplicate=True), tags=['hebrew-reader', tag]))
                 if not note_id:
                     raise ValueError('Anki did not return a note ID.')

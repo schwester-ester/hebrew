@@ -1,17 +1,18 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ivrit · Read, understand, remember</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
-<body>
-<header><a class="brand" href="/">א <span>ivrit<span class="brand-dot">.</span></span></a><span class="tagline">A little reading. A lasting vocabulary.</span><button id="settingsToggle" class="quiet">Deck & settings</button></header>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="ivrit-api-base" content="{{ api_base | default('') }}"><title>Ivrit · Read, understand, remember</title><link rel="stylesheet" href="{{ asset_base | default("/static/") }}style.css">{% if public %}<script src="{{ asset_base | default("/static/") }}browser-storage.js" defer></script>{% endif %}<script src="{{ asset_base | default("/static/") }}app.js" defer></script></head>
+<body data-public="{{ 'true' if public else 'false' }}">
+<header><a class="brand" href="./">א <span>ivrit<span class="brand-dot">.</span></span></a><span class="tagline">A little reading. A lasting vocabulary.</span><button id="settingsToggle" class="quiet">{{ 'Settings & export help' if public else 'Deck & settings' }}</button></header>
 <main>
 <section id="settings" class="settings panel" hidden>
-  <div><label for="deck">Anki deck</label><select id="deck"><option value="">Connect to Anki to choose a deck</option></select></div>
-  <div><label for="knownField">Existing notes’ Hebrew field (optional)</label><input id="knownField" placeholder="Uses first field by default"></div>
-  <button id="connect">Connect & sync</button><span id="connection" role="status">Open Anki with AnkiConnect to import directly.</span>
+  <div {% if public %}hidden{% endif %}><label for="deck">Anki deck</label><select id="deck"><option value="">Connect to Anki to choose a deck</option></select></div>
+  <div {% if public %}hidden{% endif %}><label for="knownField">Existing notes’ Hebrew field (optional)</label><input id="knownField" placeholder="Uses first field by default"></div>
+  <button id="connect" {% if public %}hidden{% endif %}>Connect & sync</button><span id="connection" role="status" {% if public %}hidden{% endif %}>Open Anki with AnkiConnect to import directly.</span>
   <details><summary>Previously skipped words</summary><div id="skips"></div></details>
-  <p class="small">Install AnkiConnect in Anki: Tools → Add-ons → Get Add-ons → <strong>2055492159</strong>, then restart Anki. You can also export a TSV file without AnkiConnect.</p>
+  {% if public %}<p class="small">Choose meanings, then use <strong>Export for Anki</strong>. Import the TSV in Anki as Basic, map Front and Back, and allow duplicate fronts as new notes to keep different meanings. Exports with recordings include a ZIP: copy its WAV files to your Anki profile’s collection.media folder before importing the TSV.</p><p class="small">Your cards, recordings, skipped words, and draft stay in this browser. Clearing browser data removes them; export cards to keep a copy. They do not sync between devices. Dictionary lookups go to Pealim; translation sends the chosen text to Google.</p>{% else %}<p class="small">Install AnkiConnect in Anki: Tools → Add-ons → Get Add-ons → <strong>2055492159</strong>, then restart Anki. You can also export a TSV file without AnkiConnect.</p>{% endif %}
 </section>
 <div class="intro"><div class="eyebrow">YOUR DAILY DOSE OF HEBREW</div><h1>Let your reading<br>become your vocabulary.</h1><p>Bring a text. Explore its words. Keep the meanings that matter.</p></div>
+{% if public %}<p class="public-note">Free to use · No account needed · Your vocabulary stays in this browser. Export it to keep a copy.</p>{% endif %}
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <div class="workspace">
 <section class="reader panel">
@@ -21,17 +22,35 @@
     <div class="reading-toolbar"><span id="textCount"></span><button id="edit" class="quiet">Edit text</button></div>
     <div id="passage" lang="he" dir="rtl"></div>
     <div class="selection-toolbar"><button id="all" class="quiet">Review all</button><button id="selected" class="quiet">Review selected <span id="selectedCount">0</span></button><button id="clear" class="quiet">Clear selection</button></div>
-    <p class="small">Click a word to explore. Ctrl / ⌘ + click to select several. Known words are muted.</p>
+    <p class="small">Ctrl / ⌘ + click toggles words. Shift + click selects a range; Ctrl / ⌘ + Shift adds a range. Known words are muted.</p>
   </div>
+  <div class="translation-tools"><button id="translate" class="quiet">Translate to English</button><span id="translationScope" class="small">Full text · Google Translate</span></div>
+  <section id="translationPanel" class="translation-panel" hidden aria-live="polite"><div class="translation-heading"><h3>Translation</h3><button id="closeTranslation" class="quiet" aria-label="Close translation">×</button></div><p id="translationStatus" class="small"></p><div id="translationOutput"></div><a id="googleTranslate" target="_blank" rel="noopener noreferrer" hidden>Open in Google Translate ↗</a></section>
   <div class="reader-note"><span class="note-icon">א</span><p><strong>One spelling, many possibilities.</strong><br>Hebrew often omits vowels. Explore each reading and choose what fits your sentence.</p></div>
 </section>
 <section class="dictionary panel">
-  <div class="section-heading"><div><span class="step">02</span><h2>Explore a word</h2></div><span class="source-label">FROM PEALIM</span></div>
+  <div class="section-heading"><div><span class="step">02</span><h2>Explore a word</h2></div><button id="addManual" class="quiet">+ Add manually</button></div>
+  <form id="manualForm" class="manual-form" hidden>
+    <div class="translation-heading"><h3>Your own card</h3><button id="cancelManual" type="button" class="quiet" aria-label="Close manual card">×</button></div>
+    <p class="small">Only the Hebrew word and a meaning are required. Each definition becomes a separate card.</p>
+    <label for="manualWord">Hebrew word or phrase *</label><input id="manualWord" dir="rtl" lang="he" required maxlength="200" autocomplete="off">
+    <label for="manualMeanings">Meaning(s) * <span class="small">One definition per line</span></label><textarea id="manualMeanings" required maxlength="40000" rows="3" placeholder="book&#10;register; record"></textarea>
+    <details id="manualOptions"><summary>Grammar, pronunciation & notes (optional)</summary>
+      <div class="manual-grid"><div><label for="manualPos">Part of speech</label><select id="manualPos"><option value="">Unspecified</option><option value="noun">Noun</option><option value="verb">Verb</option><option value="adjective">Adjective</option><option value="adverb">Adverb</option><option value="preposition">Preposition</option><option value="phrase">Phrase</option><option value="other">Other</option></select></div><div><label for="manualNumber">Number</label><select id="manualNumber"><option value="">Unspecified</option><option value="singular">Singular</option><option value="plural">Plural</option><option value="both">Both</option></select></div></div>
+      <fieldset><legend>Gender</legend><label><input id="manualMasculine" type="checkbox" value="masculine"> Masculine</label><label><input id="manualFeminine" type="checkbox" value="feminine"> Feminine</label></fieldset>
+      <label for="manualVowelled">Spelling with vowels</label><input id="manualVowelled" dir="rtl" lang="he" maxlength="200">
+      <label for="manualPronunciation">Pronunciation</label><input id="manualPronunciation" maxlength="200" placeholder="e.g. sefer">
+      <label for="manualRoot">Root</label><input id="manualRoot" dir="rtl" lang="he" maxlength="200">
+      <label for="manualNotes">Other forms, examples or notes</label><textarea id="manualNotes" rows="2" maxlength="4000"></textarea>
+    </details>
+    <div class="recording-tools"><button id="record" type="button" class="quiet">● Record pronunciation</button><button id="removeRecording" type="button" class="quiet" hidden>Remove recording</button><span id="recordStatus" class="small" role="status">Optional · up to 60 seconds</span><audio id="recordPreview" controls hidden></audio></div>
+    <p id="manualError" class="warning" role="alert" hidden></p><button id="saveManual" type="submit">Add to vocabulary</button><p class="small">Use “Add manually” again to add more cards.</p>
+  </form>
   <div id="empty"><div class="empty-hebrew" lang="he">מילה</div><h3>Every word has a story.</h3><p>Select a word in your text to see its<br>pronunciations, meanings, and forms.</p></div>
   <div id="explorer" hidden><div class="word-navigation"><button id="previous" class="icon" aria-label="Previous word">→</button><div><div id="current" lang="he" dir="rtl"></div><span id="position"></span></div><button id="next" class="icon" aria-label="Next word">←</button></div><div class="word-actions"><button id="skip" class="quiet">I know this word · skip</button><button id="retry" class="quiet">Look up again</button></div><div id="results" aria-live="polite"></div></div>
 </section>
 </div>
-<section class="tray panel"><div class="tray-heading"><div><span class="step">03</span><h2>Your next vocabulary</h2><span id="basketCount" class="pill">0 meanings</span></div><div class="tray-actions"><button id="export" class="quiet" disabled>Export TSV</button><button id="import" disabled>Import to Anki ↗</button></div></div><div id="basket"><p class="small">Choose meanings as you read. Your selected words will appear here.</p></div></section>
+<section class="tray panel"><div class="tray-heading"><div><span class="step">03</span><h2>Your next vocabulary</h2><span id="basketCount" class="pill">0 meanings</span></div><div class="tray-actions"><button id="export" class="quiet" disabled>{{ 'Export for Anki ↗' if public else 'Export TSV' }}</button><button id="import" {% if public %}hidden{% endif %} disabled>Import to Anki ↗</button></div></div><div id="basket"><p class="small">Choose meanings as you read. Your selected words will appear here.</p></div></section>
 <footer>Built for thoughtful reading <span>עברית, מילה אחרי מילה</span></footer>
 </main>
 </body></html>

@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ivrit-reader
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-hosted.txt
+    startCommand: gunicorn 'app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 180
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: IVRIT_PUBLIC
+        value: '1'
+      - key: IVRIT_ALLOWED_ORIGINS
+        value: https://schwester-ester.github.io

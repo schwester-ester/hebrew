@@ -1,32 +1,80 @@
 import os
 import threading
+import io
+import zipfile
+import re
 from pathlib import Path
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, jsonify, request, render_template, Response, g
 from anki import Anki, export_tsv
 from morphology import normalize, tokens
 from pealim import Pealim
 from storage import Store
+from manual import make_entries, summary, audio_bytes
+from translation import translate
+from portable import portable_entry
 
-def create_app(data_path=None):
+def create_app(data_path=None, public=None):
     app = Flask(__name__)
-    app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
-    store = Store(data_path or Path(os.environ.get('HEBREW_DATA_DIR', 'data')) / 'reader.sqlite3')
+    public = os.environ.get('IVRIT_PUBLIC') == '1' if public is None else public
+    app.config.update(PUBLIC_MODE=public, MAX_CONTENT_LENGTH=(32 if public else 3) * 1024 * 1024)
+    allowed_hosts = ['127.0.0.1', 'localhost']
+    if public:
+        allowed_hosts += [host.strip() for host in os.environ.get('IVRIT_ALLOWED_HOSTS', '').split(',') if host.strip()]
+        if os.environ.get('RENDER_EXTERNAL_HOSTNAME'):
+            allowed_hosts.append(os.environ['RENDER_EXTERNAL_HOSTNAME'])
+    app.config['TRUSTED_HOSTS'] = allowed_hosts
+    store = Store(data_path or Path(os.environ.get('HEBREW_DATA_DIR', 'data')) / ('public-cache.sqlite3' if public else 'reader.sqlite3'))
     dictionary, anki = Pealim(store), Anki()
     known_by_deck = {}
     known_fields = {}
     import_lock = threading.Lock()
+    external_slots = threading.BoundedSemaphore(2)
+    allowed_origins = set(filter(None, (origin.strip() for origin in os.environ.get('IVRIT_ALLOWED_ORIGINS', '').split(',')))) if public else set()
     app.extensions.update(store=store, dictionary=dictionary, anki=anki)
 
     @app.before_request
-    def local_only():
-        if request.host.split(':')[0] not in ('127.0.0.1', 'localhost'):
-            return jsonify(error='This application accepts localhost requests only.'), 403
+    def request_policy():
+        if public and (request.path in ('/api/decks', '/api/sync', '/api/import', '/api/skip') or request.path.startswith('/api/audio/')):
+            return jsonify(error='Use Export for Anki on the shared website. Desktop syncing is available in the local app.'), 404
+        origin = request.headers.get('Origin')
+        if request.path.startswith('/api/') and request.method == 'OPTIONS':
+            if origin not in allowed_origins:
+                return jsonify(error='Cross-origin requests are not allowed.'), 403
+            return Response(status=204)
         if request.method == 'POST':
-            origin = request.headers.get('Origin')
-            if origin and origin not in ('http://' + request.host, 'https://' + request.host):
+            if origin and origin not in allowed_origins | {'http://' + request.host, 'https://' + request.host}:
                 return jsonify(error='Cross-origin requests are not allowed.'), 403
             if not request.is_json:
                 return jsonify(error='Expected JSON.'), 415
+            if not isinstance(request.get_json(), dict):
+                raise ValueError('Expected a JSON object.')
+        if public and request.path in ('/api/lookup', '/api/translate'):
+            if not external_slots.acquire(blocking=False):
+                return jsonify(error='The dictionary and translation service is busy. Please retry shortly.'), 429, {'Retry-After': '5'}
+            g.external_slot = True
+
+    @app.teardown_request
+    def release_slot(error):
+        if g.pop('external_slot', False):
+            external_slots.release()
+
+    @app.after_request
+    def response_headers(response):
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        response.headers['X-Frame-Options'] = 'DENY'
+        if request.path.startswith('/api/'):
+            response.headers['Cache-Control'] = 'no-store'
+            if request.headers.get('Origin') in allowed_origins:
+                response.headers['Access-Control-Allow-Origin'] = request.headers['Origin']
+                response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+                response.vary.add('Origin')
+        return response
+
+    @app.errorhandler(413)
+    def too_large(error):
+        return jsonify(error='This request is too large. Export fewer recorded cards at a time.'), 413
 
     @app.errorhandler(ValueError)
     def invalid(error):
@@ -34,7 +82,34 @@ def create_app(data_path=None):
 
     @app.get('/')
     def index():
-        return render_template('index.html')
+        return render_template('index.html', public=public)
+
+    @app.get('/healthz')
+    def health():
+        return jsonify(status='ok')
+
+    @app.post('/api/translate')
+    def translate_text():
+        parts = request.get_json().get('parts')
+        if public and isinstance(parts, list) and sum(len(p) for p in parts if isinstance(p, str)) > 10000:
+            raise ValueError('Translate at most 10,000 characters at a time on the shared website.')
+        return jsonify(translations=translate(parts))
+
+    @app.post('/api/manual')
+    def manual():
+        entries = make_entries(request.get_json())
+        if public:
+            return jsonify(entries=entries)
+        for entry in entries:
+            store.entry(entry)
+        return jsonify(entries=[summary(e) for e in entries])
+
+    @app.get('/api/audio/<identity>')
+    def audio(identity):
+        if not re.fullmatch(r'manual-[a-f0-9]{32}', identity):
+            return jsonify(error='Recording not found.'), 404
+        entry = store.get_entry(identity)
+        return Response(audio_bytes(entry), content_type='audio/wav')
 
     @app.get('/api/decks')
     def decks():
@@ -59,7 +134,7 @@ def create_app(data_path=None):
         if not isinstance(text, str) or len(text) > 50000:
             raise ValueError('Use a text shorter than 50,000 characters.')
         words, _ = known_by_deck.get(data.get('deck', ''), (set(), set()))
-        skipped = store.skips()
+        skipped = set() if public else store.skips()
         items = tokens(text)
         for item in items:
             item['known'] = item['key'] in words or item['key'] in skipped
@@ -89,6 +164,12 @@ def create_app(data_path=None):
         return jsonify(skipped=sorted(store.skips()))
 
     def selected(data):
+        if public:
+            entries = data.get('entries')
+            if not isinstance(entries, list) or not 1 <= len(entries) <= 500:
+                raise ValueError('Select between 1 and 500 vocabulary meanings.')
+            validated = [portable_entry(e) for e in entries]
+            return list({e['id']: e for e in validated}.values())
         ids = data.get('ids', [])
         if not isinstance(ids, list) or not ids or len(ids) > 500 or not all(isinstance(i, str) for i in ids):
             raise ValueError('Select between 1 and 500 dictionary meanings.')
@@ -108,7 +189,18 @@ def create_app(data_path=None):
 
     @app.post('/api/export')
     def export():
-        return Response(export_tsv(selected(request.get_json())), content_type='text/tab-separated-values; charset=utf-8',
+        entries = selected(request.get_json())
+        if any(e.get('recording') for e in entries):
+            out = io.BytesIO()
+            with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('hebrew-vocabulary.tsv', export_tsv(entries))
+                for e in entries:
+                    if e.get('recording'):
+                        archive.writestr(e['audio_filename'], audio_bytes(e))
+                archive.writestr('README.txt', 'Copy the WAV files into your Anki profile collection.media folder, then import hebrew-vocabulary.tsv. Allow duplicate fronts as new notes to preserve different meanings.\n')
+            return Response(out.getvalue(), content_type='application/zip',
+                            headers={'Content-Disposition': 'attachment; filename="hebrew-vocabulary.zip"'})
+        return Response(export_tsv(entries), content_type='text/tab-separated-values; charset=utf-8',
                         headers={'Content-Disposition': 'attachment; filename="hebrew-vocabulary.tsv"'})
 
     return app
