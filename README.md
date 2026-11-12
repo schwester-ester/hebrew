@@ -45,7 +45,7 @@ To keep this strictly free, use the Free service plan without adding a payment m
 
 The [free tier](https://render.com/docs/free) sleeps after 15 minutes without traffic, and the first request can take about a minute to wake it. It has monthly usage limits; stay on the Free compute plan and check the workspace's usage/billing settings rather than adding paid extras. The server filesystem is temporary, so the public version keeps each visitor's vocabulary, recordings, draft, and skipped words in their own browser's IndexedDB. Exported cards continue working after server cache loss. There are no accounts or cross-device storage: clearing site data removes that browser's saved work, so export cards to retain a copy.
 
-The public version supports **Export for Anki** (TSV or ZIP with recordings) and an optional direct connection from the visitor’s browser to their own Anki desktop. The shared Python server only validates and formats cards for import; it never calls AnkiConnect or exposes local stored recordings. Deck names, collection contents, and AnkiConnect API keys stay on the visitor’s computer. Reading and manual-card requests are processed by the server without saving personal content; only public dictionary entries/pages are cached. Translation passes the selected text to Google on demand. Dictionary/translation availability still depends on Pealim and Google's public endpoints.
+The public version supports **Export for Anki** (full-field TSV, Basic TSV, ZIP with recordings, or .apkg deck packages) and an optional direct connection from the visitor’s browser to their own Anki desktop or AnkiDroid through the Android companion. The shared Python server only validates and formats cards for import; it never calls AnkiConnect or exposes local stored recordings. Collection contents and AnkiConnect API keys stay in the visitor’s browser. Package export sends only the user-selected deck name and tray cards to the server to build a temporary download; temporary package/media files are removed after generation. Reading and manual-card requests are processed by the server without saving personal content; only public dictionary entries/pages are cached. Translation passes the selected text to Google on demand. Dictionary/translation availability still depends on Pealim and Google's public endpoints.
 
 The public service accepts two concurrent dictionary/translation requests, returning a retry message when busy. Translation requests are limited to 10,000 characters and exports to a 32 MB request body. Recorded cards are validated, source links are restricted to Pealim, and ZIP audio filenames are generated from validated card identities.
 
@@ -60,7 +60,7 @@ Open `http://127.0.0.1:5060`. For a different host outside Render, set `IVRIT_AL
 
 ## Connect your deck
 
-The **Your Anki desktop** panel at the top works on the public website and in the local app. TSV/ZIP export remains available without connecting.
+The **Your Anki** panel at the top works on the public website and in the local app. TSV/ZIP export remains available without connecting.
 
 1. Install [AnkiConnect](https://ankiweb.net/shared/info/2055492159) in Anki desktop using add-on code `2055492159`, restart Anki, and keep a profile open on the same computer as your browser.
 2. Click **Connect & sync**. On the public website, approve the AnkiConnect request in Anki. If the browser asks for local network access, allow it. The browser contacts only `http://127.0.0.1:8765`; the hosted Python service never connects to your desktop.
@@ -76,6 +76,19 @@ If access was denied, check this website’s local network permission in the bro
 
 When this app runs in WSL and Anki runs on Windows, Linux and Windows may have separate localhost interfaces. If the Linux connection fails, the app automatically uses Windows `curl.exe` (when available on PATH) to reach Windows AnkiConnect. It sends requests through stdin, including recorded audio, and keeps AnkiConnect bound to localhost. No firewall or AnkiConnect bind-address changes are needed. Keep your Windows Anki profile open. If connection still fails, restart Anki and check that AnkiConnect is enabled under Tools → Add-ons. You can verify the add-on from a Windows browser at `http://127.0.0.1:8765`. See [AnkiConnect setup](https://github.com/ankicommunity/anki-desktop-addon-connect#installation) and [Microsoft's WSL networking documentation](https://learn.microsoft.com/windows/wsl/networking).
 
+## Android / AnkiDroid
+
+The website cannot access AnkiDroid’s native Android database API on its own. Direct sync uses the free, unofficial [AnkiConnect Android companion](https://github.com/KamWithK/AnkiconnectAndroid), which exposes a local HTTP API. This mode is selected automatically on Android and can be selected manually under **Connect to**.
+
+1. Install AnkiDroid and install the companion from its [releases](https://github.com/KamWithK/AnkiconnectAndroid/releases/latest). Open AnkiDroid, grant the companion its AnkiDroid permission, and start its service.
+2. In the companion’s settings, set the CORS host to `https://schwester-ester.github.io` (or the exact origin shown by the website). Allow the browser’s local network permission if prompted. Keep the companion’s service running while using direct sync.
+3. On first use, add at least one vocabulary card, enter a **Deck name for Anki package**, and tap **Download Anki package (.apkg)**. Open the file in AnkiDroid and confirm import. This supplies the Hebrew Reader note type, deck, cards, and any recordings.
+4. Back on the website, select **AnkiDroid · Android companion** and tap **Connect & sync**. Pick an existing AnkiDroid deck from the dropdown, add more cards, and tap **Sync cards to Anki**. The browser reads and writes to AnkiDroid through the companion. Use AnkiDroid’s own Sync button separately for AnkiWeb.
+
+The companion does not implement the desktop API’s permission prompt, note-type creation, or deck creation. Android mode uses its supported actions, asks for one-time package setup when the note type is absent, and adjusts recording references when the companion renames media. To create another deck, create it in AnkiDroid or enter the new package deck name, import that package, and reconnect. See the companion’s [supported API](https://github.com/KamWithK/AnkiconnectAndroid/blob/master/docs/api.md).
+
+Without the companion, package export still works on mobile: choose the target deck name, download the package, open it in AnkiDroid, and confirm. This requires an import confirmation and does not enumerate the phone’s decks in the website. Reimporting the same package identities updates/skips those package notes rather than creating duplicates; notes imported earlier through TSV or desktop direct sync can have different Anki GUIDs and may be separate notes. No AnkiWeb credentials, paid hosting, or new hosted service are required.
+
 ## Read and import
 
 - Paste a passage and choose **Start reading**. Punctuation, spaces, and vowel marks remain visible.
@@ -85,7 +98,7 @@ When this app runs in WSL and Anki runs on Windows, Linux and Windows may have s
 - **Add meaning** selects a dictionary entry. Several meanings with the same spelling can be selected independently. The tray persists across refreshes and texts.
 - **I know this word · skip** remembers that exact unpointed surface spelling across future texts. Undo it from **Previously skipped words** or by clicking the muted word.
 - **Sync cards to Anki** creates a `Hebrew Reader` note type with a Hebrew-to-meaning card and adds notes to the selected deck. The answer contains pointed spelling, pronunciation, stress, meaning, grammatical information, root, useful noun/adjective forms, and a source link. Successful notes leave the tray; failed notes remain available for retry. Duplicate Pealim IDs in the selected deck are skipped. Distinct homographs are allowed.
-- **Export TSV** works without Anki. Import the file as Basic with Front and Back mapped; its third column is automatically treated as tags. HTML is enabled by a file header. Choose the import option that adds duplicate fronts as new notes to preserve homographs. Sync after importing; exported cards carry the same Pealim identity tags as direct imports. Downloading alone does not mark words known. See [Anki's text import documentation](https://docs.ankiweb.net/manual/importing/text-files).
+- **Export for Anki** offers **TSV · Hebrew Reader fields** (the default), **TSV · Basic Front / Back**, and **Anki package (.apkg)**. The full TSV has separate Word, Meaning, Pronunciation, Grammar, Root, Forms, Source, Tags, and Notetype columns. The per-row Notetype requires Hebrew Reader; if it is missing, Anki reports that instead of silently losing fields. Confirm that each column maps to its matching field. If that note type is missing, first import a package from this app. Basic TSV explicitly requires Basic and combines the answer information in Back. Both TSV formats enable HTML with a file header. To repair an earlier empty-field import, re-export the affected cards, choose Hebrew Reader, and use “update existing notes” after reviewing the matches. If several notes share a Hebrew front, check the matches carefully. Choose “import as new notes” for new, distinct meanings with the same Hebrew front. Package import includes the note type, layout, and recordings without manual field mapping. Downloads retain the tray; reconnect after importing to recognize existing identities. See [Anki’s text import documentation](https://docs.ankiweb.net/importing/text-files.html).
 
 ## Add your own meanings
 
@@ -95,7 +108,7 @@ Choose **+ Add manually** in the dictionary panel, including when Pealim has no 
 
 Manual entries join the same vocabulary tray and persist across reloads. They use separate identity tags, so different meanings with identical Hebrew fronts can be added independently, including words already present on older untagged cards. Retrying an import of the same manual entry skips its existing identity. A newly authored card gets a new identity.
 
-When selected cards include recordings, **Export TSV** downloads a ZIP containing the TSV, WAV files, and instructions. Extract the ZIP, copy the WAV files into your Anki profile's `collection.media` folder, then import the TSV. Direct Anki imports handle this automatically. TSV-only exports continue to work for cards without recordings.
+When selected cards include recordings, **Export TSV** downloads a ZIP containing the TSV, WAV files, and instructions. Extract the ZIP, copy the WAV files into your Anki profile's `collection.media` folder, then import the TSV. Direct Anki imports and .apkg packages handle recordings automatically. TSV-only exports continue to work for cards without recordings.
 
 ## Canonical forms
 
@@ -134,6 +147,7 @@ Optional browser checks (require Playwright and Chromium; set `CHROMIUM_PATH` if
 .venv/bin/python tests/browser_features.py
 .venv/bin/python tests/browser_public.py
 .venv/bin/python tests/browser_anki.py
+.venv/bin/python tests/browser_android.py
 ```
 
 The feature browser check uses an isolated database, simulated translation/Anki services, and Chromium's synthetic microphone to exercise disjoint selections, recording conversion, media export/import, reload persistence, and mobile layout.
@@ -141,3 +155,15 @@ The feature browser check uses an isolated database, simulated translation/Anki 
 The public browser check uses two isolated browser contexts to verify that visitors cannot see each other's cards, audio, drafts, or skips. It also deletes the server cache before exporting browser-owned dictionary cards and recorded manual cards.
 
 The hosted Anki browser check simulates AnkiConnect instead of accessing a real collection. It exercises permission/key handling, deck selection and creation, recorded-card import, duplicate protection, failed-card retries, custom Hebrew fields, browser-only collection data, and mobile layout.
+
+The Android browser check emulates a phone browser and the companion’s documented API. It checks mode selection, existing decks, note-type bootstrap, complete TSV and package downloads, renamed audio, invalid-note retry, and mobile layout. It does not replace a test on a physical Android device.
+
+Optional import verification uses the official Anki engine in a separate environment (the project’s own `anki.py` must not shadow that package):
+
+```bash
+python3 -m venv /tmp/ivrit-anki-verify
+/tmp/ivrit-anki-verify/bin/pip install anki
+ANKI_PYTHON=/tmp/ivrit-anki-verify/bin/python .venv/bin/python -m pytest -q tests/test_packages.py
+```
+
+This verifies the original TSV field-loss reproduction, both corrected TSV mappings, rendered package cards, bundled recordings, and repeat package import in temporary collections. It never opens your real Anki profile.

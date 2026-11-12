@@ -4,6 +4,7 @@
   const endpoint='http://127.0.0.1:8765';
   let connected=false;
   const key=()=>document.getElementById('ankiKey').value;
+  const android=()=>document.getElementById('connectionMode').value==='android';
   const normalize=text=>text.normalize('NFKD').replace(/[^א-ת\s׳'״"]/gu,'').trim().replace(/׳/g,"'").replace(/״/g,'"');
   const deckQuery=deck=>'deck:"'+deck.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"';
 
@@ -18,7 +19,7 @@
         body:JSON.stringify({action,version:6,params,...(action!=='requestPermission' && key() ? {key:key()} : {})})});
       if(!response.ok)throw new Error('HTTP '+response.status);
     } catch(error) {
-      throw Object.assign(new Error('Could not reach AnkiConnect. Open Anki on this computer, install or update AnkiConnect, and allow this site’s local network access in your browser. See connection help above.'),{connectionLost:true});
+      throw Object.assign(new Error(android() ? 'Could not reach AnkiDroid’s companion. Open AnkiDroid, start AnkiConnect Android, check its CORS host setting, and allow local network access in your browser.' : 'Could not reach AnkiConnect. Open Anki on this computer, install or update AnkiConnect, and allow this site’s local network access in your browser. See connection help above.'),{connectionLost:true});
     } finally {clearTimeout(timer);}
     let payload;
     try {payload=await response.json();} catch {throw new Error('AnkiConnect returned an invalid response. Update the add-on and restart Anki.');}
@@ -29,10 +30,17 @@
 
   async function connect() {
     connected=false;
-    const permission=await call('requestPermission');
-    if(permission?.permission!=='granted')throw new Error('Access to Anki was denied. Approve this website in Anki, then retry. See connection help above.');
-    if((permission.requireApiKey || permission.requireApikey) && !key())throw new Error('AnkiConnect requires your API key. Enter it under connection help, then connect again.');
+    if(android()) {
+      // The Android companion has no requestPermission action. Access is
+      // granted in Android and its CORS settings, before starting its service.
+      if(await call('version')!==6)throw new Error('Update AnkiConnect Android to a version supporting API 6.');
+    } else {
+      const permission=await call('requestPermission');
+      if(permission?.permission!=='granted')throw new Error('Access to Anki was denied. Approve this website in Anki, then retry. See connection help above.');
+      if((permission.requireApiKey || permission.requireApikey) && !key())throw new Error('AnkiConnect requires your API key. Enter it under connection help, then connect again.');
+    }
     const decks=await call('deckNames');
+    if(!Array.isArray(decks) || decks.some(deck=>typeof deck!=='string'))throw new Error('Anki returned an invalid deck list. Update AnkiConnect and retry.');
     connected=true;
     return {decks};
   }
@@ -63,6 +71,7 @@
 
   async function createDeck(name) {
     if(!connected)throw new Error('Connect to Anki first.');
+    if(android())throw new Error('Create the deck in AnkiDroid, or import an Anki package with that deck name, then reconnect.');
     name=name.trim();
     if(!name || name.length>200 || /[\x00-\x1f]/.test(name))throw new Error('Enter a deck name between 1 and 200 characters.');
     await call('createDeck',{deck:name});
@@ -74,7 +83,10 @@
     if(!(await call('deckNames')).includes(deck))throw new Error('Select an existing Anki deck.');
     const existing=await known(deck,field), words=new Set(existing.words), ids=new Set(existing.entries);
     const model=prepared.model;
-    if(!(await call('modelNames')).includes(model.modelName))await call('createModel',model);
+    if(!(await call('modelNames')).includes(model.modelName)) {
+      if(android())throw new Error('First download an Anki package and open it in AnkiDroid to install the Hebrew Reader note type. Then reconnect and sync.');
+      await call('createModel',model);
+    }
     else if(JSON.stringify(await call('modelFieldNames',{modelName:model.modelName}))!==JSON.stringify(model.inOrderFields)) {
       throw new Error('An existing Hebrew Reader model has incompatible fields. Rename it in Anki, then retry.');
     }
@@ -86,13 +98,16 @@
         if(ids.has(card.id) || (!card.manual && words.has(card.word)) || (await call('findNotes',{query:deckQuery(deck)+' tag:'+tag})).length) {
           result.duplicates.push(card.id);continue;
         }
+        const fields={...card.fields};
         if(card.recording) {
           const filename=await call('storeMediaFile',{filename:card.audio_filename,data:card.recording});
-          if(filename!==card.audio_filename)throw new Error('Anki could not save the recording. Retry this card.');
+          if(android() && typeof filename==='string' && /^[a-zA-Z0-9_-]+\.wav$/.test(filename)) {
+            fields.Pronunciation=fields.Pronunciation.replaceAll('[sound:'+card.audio_filename+']','[sound:'+filename+']');
+          } else if(filename!==card.audio_filename)throw new Error('Anki could not save the recording. Retry this card.');
         }
-        const note=await call('addNote',{note:{deckName:deck,modelName:model.modelName,fields:card.fields,
+        const note=await call('addNote',{note:{deckName:deck,modelName:model.modelName,fields,
           options:{allowDuplicate:true},tags:card.tags}});
-        if(!note)throw new Error('Anki did not return a note ID.');
+        if(!Number.isSafeInteger(Number(note)) || Number(note)<=0)throw new Error('Anki did not return a valid note ID.');
         result.imported.push(card.id);ids.add(card.id);
       } catch(error) {
         result.failed.push({id:card.id,error:error.message});
@@ -104,5 +119,5 @@
     }
     return result;
   }
-  window.IvritAnki={connect,known,createDeck,add};
+  window.IvritAnki={connect,known,createDeck,add,disconnect:()=>{connected=false;}};
 })();

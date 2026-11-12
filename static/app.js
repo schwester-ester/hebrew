@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const publicSite=document.body.dataset.public==='true';
 const apiBase=document.querySelector('meta[name="ivrit-api-base"]')?.content || '';
 const apiURL=path=>apiBase+'/api/'+path;
+const androidAnki=()=>publicSite && $('connectionMode').value==='android';
 let browserLoaded=!publicSite;
 const audioURLs=new Map();
 let words = [], selected = new Set(), queue = [], position = -1, basket = new Map(), lookupVersion = 0;
@@ -59,13 +60,15 @@ function renderBasket() {
   snapshot();
   $('basketCount').textContent = `${basket.size} meaning${basket.size === 1 ? '' : 's'}`;
   $('export').disabled = !basket.size || reviewBusy;
+  $('exportPackage').disabled = !basket.size || reviewBusy;
   $('import').disabled = !basket.size || !syncedDeck || deck() !== syncedDeck || reviewBusy || connectionBusy;
   $('syncCards').disabled=$('import').disabled;
   $('deck').disabled=!ankiConnected || reviewBusy || connectionBusy;
   $('connect').disabled=reviewBusy || connectionBusy;
-  $('createDeck').disabled=!ankiConnected || reviewBusy || connectionBusy;
+  $('createDeck').disabled=(!ankiConnected && !androidAnki()) || reviewBusy || connectionBusy;
   $('newDeck').disabled=reviewBusy || connectionBusy;
   $('knownField').disabled=reviewBusy || connectionBusy;
+  if(publicSite)$('connectionMode').disabled=reviewBusy || connectionBusy;
   $('basket').innerHTML = basket.size ? [...basket.values()].map(e => `<div class="basket-item"><span class="lemma">${he(e.canonical.plain)}</span><span class="small">${escapeHTML(e.meaning)}${e.source === 'manual' ? '<br>Added manually' : ''}</span>${e.audio_filename ? `<audio controls preload="none" src="${cardAudio(e)}" aria-label="Your recording"></audio>` : ''}<button class="quiet" data-remove="${e.id}">Remove</button></div>`).join('') : '<p class="small">Choose meanings as you read. Your selected words will appear here.</p>';
 }
 if(!publicSite)try { for (const e of JSON.parse(localStorage.getItem('ivrit-basket') || '[]')) if(e?.canonical && /^(\d+|manual-[a-f0-9]{32})$/.test(e.id)) basket.set(e.id,e); } catch {}
@@ -158,7 +161,7 @@ function renderSkips() {
 }
 async function connect() {
   connectionBusy=true; ankiConnected=false; forgetDeck();renderBasket();
-  $('connection').textContent='Connecting… approve access in Anki and your browser if asked.';
+  $('connection').textContent='Connecting… approve any access prompts on this device.';
   try {
     const {decks} = await api('decks');
     ankiConnected=true;
@@ -184,6 +187,7 @@ async function sync() {
     if(deck() !== selectedDeck) return;
     syncedDeck=selectedDeck; knownIds=new Set(result.entries); resultsByWord.clear();
     localStorage.setItem('ivrit-deck',selectedDeck);
+    $('packageDeck').value=selectedDeck;
     $('connection').textContent=`Connected · ${result.words.length + result.entries.length} known words / meanings`;
     knownWords = new Set(result.words);
     for(const [id, entry] of basket) if(knownIds.has(id) || (entry.source !== 'manual' && knownWords.has(entry.canonical.plain))) basket.delete(id);
@@ -197,6 +201,12 @@ $('settingsToggle').onclick=()=>{$('settings').hidden=!$('settings').hidden;};
 $('connect').onclick=handle(connect);
 $('deck').onchange=handle(sync);
 $('createDeck').onclick=handle(async()=>{
+  if(androidAnki()) {
+    if(!$('newDeck').value.trim())throw new Error('Enter the new deck name first.');
+    $('packageDeck').value=$('newDeck').value.trim();
+    notice('Download an Anki package and open it in AnkiDroid to create this deck. Then reconnect to select it for direct sync.');
+    return;
+  }
   connectionBusy=true;renderBasket();
   try {
     const result=await api('create-deck',{name:$('newDeck').value});
@@ -207,7 +217,23 @@ $('createDeck').onclick=handle(async()=>{
   finally {connectionBusy=false;renderBasket();}
 });
 $('syncCards').onclick=()=>{$('import').click();};
-if(publicSite)$('ankiOrigin').textContent=location.origin;
+if(publicSite) {
+  $('ankiOrigin').textContent=location.origin;$('androidOrigin').textContent=location.origin;
+  $('connectionMode').value=localStorage.getItem('ivrit-anki-mode') || (/Android/i.test(navigator.userAgent) ? 'android' : 'desktop');
+  function changeConnectionMode() {
+    IvritAnki.disconnect();ankiConnected=false;forgetDeck();
+    $('deck').innerHTML='<option value="">Connect to choose a deck</option>';
+    $('androidHelp').hidden=!androidAnki();
+    $('desktopSetup').hidden=androidAnki();$('desktopBrowserHelp').hidden=androidAnki();$('desktopKey').hidden=androidAnki();
+    $('ankiKey').value='';
+    $('createDeck').textContent=androidAnki() ? 'Use for package' : 'Create deck';
+    $('connection').textContent=androidAnki() ? 'Start AnkiConnect Android on this phone, then connect. Package import also works without the companion.' : 'Open Anki desktop with AnkiConnect on this computer, then connect.';
+    localStorage.setItem('ivrit-anki-mode',$('connectionMode').value);renderBasket();
+  }
+  $('connectionMode').onchange=changeConnectionMode;
+  // Initialization updates the UI only; it never contacts a local service.
+  changeConnectionMode();
+}
 $('read').onclick=handle(startReading);
 $('example').onclick=()=>{$('input').value='קראתי ספר טוב בבית. הילדים משחקים בגינה, ועל השולחנות יש ספרים חדשים.';$('editor').hidden=false;$('reading').hidden=true;};
 $('edit').onclick=()=>{lookupVersion++; $('editor').hidden=false;$('reading').hidden=true;$('explorer').hidden=true;$('empty').hidden=false;};
@@ -255,15 +281,19 @@ $('import').onclick=handle(async()=>{
   } catch(error) {$('connection').textContent=error.message;throw error;}
   finally {reviewBusy=false;$('import').textContent='Sync cards to Anki ↗';$('syncCards').textContent='Sync cards to Anki ↗';renderBasket();}
 });
-$('export').onclick=handle(async()=>{
+async function downloadCards(format) {
   if(publicSite)await browserReady;
-  const payload=publicSite ? {entries:[...basket.values()]} : {ids:[...basket.keys()]};
+  const payload={...(publicSite ? {entries:[...basket.values()]} : {ids:[...basket.keys()]}),format};
+  if(format==='apkg')payload.package_deck=$('packageDeck').value.trim();
   const response=await fetch(apiURL('export'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   if(!response.ok)throw new Error((await response.json()).error);
   const archive=response.headers.get('Content-Type').includes('application/zip');
-  const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download=archive ? 'hebrew-vocabulary.zip' : 'hebrew-vocabulary.tsv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  notice((archive ? 'ZIP downloaded. Extract it and copy the WAV files into your Anki profile’s collection.media folder. ' : 'TSV downloaded. ') + 'Import the TSV as Basic, map Front and Back, and allow HTML. Choose “import as new notes” to retain meanings sharing a spelling.' + (publicSite ? '' : ' Sync your deck after importing.'));
-});
+  const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download=format==='apkg' ? 'hebrew-vocabulary.apkg' : archive ? 'hebrew-vocabulary.zip' : 'hebrew-vocabulary.tsv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  if(format==='apkg')notice('Anki package downloaded. Open it in Anki or AnkiDroid and confirm import. All fields, card layouts, and recordings are included. The package uses the deck name you entered. Cards stay in this browser; importing again detects notes from earlier packages.');
+  else notice((archive ? 'ZIP downloaded. Extract it and copy the WAV files into your Anki profile’s collection.media folder. ' : 'TSV downloaded. ') + (format==='basic-tsv' ? 'This TSV specifies Basic and automatically maps Front and Back.' : 'This TSV specifies Hebrew Reader and automatically maps Word, Meaning, Pronunciation, Grammar, Root, Forms, and Source. If that note type is missing, first import an Anki package from this app.') + ' Enable HTML. To repair an earlier empty-field import, choose “update existing notes” and check the matches. For new meanings sharing a spelling, choose “import as new notes”.');
+}
+$('export').onclick=handle(()=>downloadCards($('exportFormat').value));
+$('exportPackage').onclick=handle(()=>downloadCards('apkg'));
 
 function translationParts() {
   const input=$('input');

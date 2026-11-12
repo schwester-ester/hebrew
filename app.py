@@ -12,6 +12,7 @@ from storage import Store
 from manual import make_entries, summary, audio_bytes
 from translation import translate
 from portable import portable_entry
+from packages import export_package
 
 def create_app(data_path=None, public=None):
     app = Flask(__name__)
@@ -207,18 +208,26 @@ def create_app(data_path=None, public=None):
 
     @app.post('/api/export')
     def export():
-        entries = selected(request.get_json())
+        data = request.get_json()
+        entries = selected(data)
+        format = data.get('format', 'tsv')
+        if format not in ('tsv', 'basic-tsv', 'apkg'):
+            raise ValueError('Choose TSV or Anki package export.')
+        if format == 'apkg':
+            return Response(export_package(entries, data.get('package_deck', 'Hebrew Reader')), content_type='application/apkg',
+                            headers={'Content-Disposition': 'attachment; filename="hebrew-vocabulary.apkg"'})
+        basic = format == 'basic-tsv'
         if any(e.get('recording') for e in entries):
             out = io.BytesIO()
             with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr('hebrew-vocabulary.tsv', export_tsv(entries))
+                archive.writestr('hebrew-vocabulary.tsv', export_tsv(entries, basic=basic))
                 for e in entries:
                     if e.get('recording'):
                         archive.writestr(e['audio_filename'], audio_bytes(e))
-                archive.writestr('README.txt', 'Copy the WAV files into your Anki profile collection.media folder, then import hebrew-vocabulary.tsv. Allow duplicate fronts as new notes to preserve different meanings.\n')
+                archive.writestr('README.txt', 'Copy the WAV files into your Anki profile collection.media folder, then import hebrew-vocabulary.tsv. The file specifies ' + ('Basic with Front and Back' if basic else 'Hebrew Reader with Word, Meaning, Pronunciation, Grammar, Root, Forms, Source') + '. Enable HTML and import duplicate fronts as new notes to preserve different meanings. If Hebrew Reader is missing, first import an Anki package (.apkg) exported by this app; it includes the note type and recordings.\n')
             return Response(out.getvalue(), content_type='application/zip',
                             headers={'Content-Disposition': 'attachment; filename="hebrew-vocabulary.zip"'})
-        return Response(export_tsv(entries), content_type='text/tab-separated-values; charset=utf-8',
+        return Response(export_tsv(entries, basic=basic), content_type='text/tab-separated-values; charset=utf-8',
                         headers={'Content-Disposition': 'attachment; filename="hebrew-vocabulary.tsv"'})
 
     return app

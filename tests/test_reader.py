@@ -74,10 +74,16 @@ def test_uninflected_bases_are_not_personal_forms(kind,id,plain,pronunciation):
 
 def test_tsv_preserves_identity_and_html():
     content = export_tsv([entry(), entry('verb')])
-    assert '#html:true' in content and '#tags column:3' in content
+    assert '#html:true' in content and '#tags column:8' in content and '#notetype column:9' in content
     rows = list(csv.reader(io.StringIO('\n'.join(line for line in content.splitlines() if not line.startswith('#'))), delimiter='\t'))
-    assert len(rows) == 2 and len(rows[0]) == 3
-    assert 'pealim::6104' in rows[0][2] and 'סֵפֶר' in rows[0][1]
+    assert len(rows) == 2 and len(rows[0]) == 9 and rows[0][8] == 'Hebrew Reader'
+    assert 'pealim::6104' in rows[0][7] and 'סֵפֶר' in rows[0][2]
+    assert rows[0][:7] == list(card_fields(entry()).values())
+    basic = export_tsv([entry()], basic=True)
+    assert '#notetype column:4' in basic and '#tags column:3' in basic
+    basic_rows = list(csv.reader(io.StringIO('\n'.join(line for line in basic.splitlines() if not line.startswith('#'))), delimiter='\t'))
+    assert basic_rows[0][0] == 'ספר' and 'book' in basic_rows[0][1] and 'sefer' in basic_rows[0][1]
+    assert basic_rows[0][3] == 'Basic'
 
 def test_lookup_filters_phrase_suggestions_and_deduplicates(tmp_path, monkeypatch):
     store = Store(tmp_path / 'db.sqlite')

@@ -50,14 +50,19 @@ def card_fields(entry):
                 Root=html.escape(entry['root']), Forms='<br>'.join(forms + ([html.escape(entry['notes'])] if entry.get('notes') else [])),
                 Source='Added manually' if entry.get('source') == 'manual' else f'<a href="{html.escape(entry["url"], quote=True)}">Pealim · {entry["id"]}</a>')
 
-def export_tsv(entries):
+def export_tsv(entries, basic=False):
     out = io.StringIO()
-    out.write('#separator:Tab\n#html:true\n#tags column:3\n#columns:Front\tBack\tTags\n')
+    columns = ['Front', 'Back'] if basic else FIELDS
+    # A global #notetype preset is silently ignored if the model is missing.
+    # A per-row type makes Anki report a missing model instead of importing
+    # only the first field into whichever model was previously selected.
+    out.write('#separator:Tab\n#html:true\n#notetype column:' + str(len(columns) + 2) + '\n')
+    out.write('#tags column:' + str(len(columns) + 1) + '\n#columns:' + '\t'.join(columns + ['Tags', 'Notetype']) + '\n')
     writer = csv.writer(out, delimiter='\t', lineterminator='\n')
     for entry in entries:
         fields = card_fields(entry)
-        back = '<br>'.join(fields[k] for k in FIELDS[1:] if fields[k])
-        writer.writerow([fields['Word'], back, 'hebrew-reader ' + identity_tag(entry)])
+        values = [fields['Word'], '<br>'.join(fields[k] for k in FIELDS[1:] if fields[k])] if basic else [fields[k] for k in FIELDS]
+        writer.writerow(values + ['hebrew-reader ' + identity_tag(entry), 'Basic' if basic else MODEL])
     return out.getvalue()
 
 class Anki:
